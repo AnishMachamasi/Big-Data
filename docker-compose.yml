@@ -1,48 +1,99 @@
 version: '3'
 
 services:
-  jupyter:
-    image: jupyter/scipy-notebook:latest
+  zookeeper:
+    image: docker.io/bitnami/zookeeper:3.9
     ports:
-      - "8888:8888"
+      - "2181:2181"
     volumes:
-      - ./notebooks:/home/jovyan/work  # Mount local directory for notebooks
+      - "zookeeper_data:/bitnami"
     environment:
-      JUPYTER_ENABLE_LAB: "yes"
+      - ALLOW_ANONYMOUS_LOGIN=yes
     networks:
       - kafka-net
-  
+
   kafka:
-    image: wurstmeister/kafka:latest
+    image: docker.io/bitnami/kafka:3.4
     ports:
       - "9092:9092"
+    volumes:
+      - "kafka_data:/bitnami"
     environment:
-      KAFKA_ADVERTISED_HOST_NAME: kafka
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_CREATE_TOPICS: "test-topic:1:1"  # Replace with your desired topics
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
     depends_on:
       - zookeeper
     networks:
       - kafka-net
 
-  zookeeper:
-    image: wurstmeister/zookeeper:latest
+  jupyter:
+    build:
+      context: .
+      dockerfile: ./jupyter/Dockerfile
     ports:
-      - "2181:2181"
-    networks:
-      - kafka-net
-
-  nifi:
-    image: apache/nifi:latest
-    ports:
-      - "8443:8443"
-    environment:
-      - NIFI_WEB_HTTP_PORT=8443
+      - "8888:8888"
     volumes:
-      - ./nifi:/opt/nifi/nifi-current/postgresdriver
+      - ./notebooks/:/home/jovyan/spark  # Mount local directory for notebooks
+    environment:
+      - JUPYTER_ENABLE_LAB = yes
+      - GRANT_SUDO=yes
+      - SPARK_MASTER=spark://spark:7077
     networks:
       - kafka-net
 
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-db
+    environment:
+      MYSQL_ROOT_PASSWORD: Mysql123
+      MYSQL_DATABASE: mysqldb
+      MYSQL_USER: mysqluser
+      MYSQL_PASSWORD: Mysql123
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - kafka-net
+
+######################################################
+# SPARK SERVICES
+######################################################
+  spark:
+    image: bitnami/spark:3.5.0
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      - SPARK_USER=spark
+      - JAVA_HOME=/opt/bitnami/java
+      - SPARK_JARS_DIR=/opt/bitnami/spark/jars
+    ports:
+      - "8181:8080"
+      - "7077:7077"
+    networks:
+      - kafka-net
+  spark-worker:
+    image: bitnami/spark:3.5.0
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark:7077
+      - SPARK_WORKER_MEMORY=1G
+      - SPARK_WORKER_CORES=1
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      - SPARK_USER=spark
+      - SPARK_JARS_DIR=/opt/bitnami/spark/jars
+      - JAVA_HOME=/opt/bitnami/java
+    networks:
+      - kafka-net
+    ports:
+      - "8082:8082"
+
+  ## Airflow
   postgres:
     image: postgres:12
     environment:
@@ -52,7 +103,8 @@ services:
     ports:
       - "5434:5432"
     volumes:
-      - ./postgres_data:/postgres_data
+      - ./postgres_data:/var/lib/postgresql/data
+      - ./data:/data
     networks:
       - kafka-net
 
@@ -76,13 +128,12 @@ services:
     depends_on:
       - postgres
     environment:
-      - AIRFLOW__CORE__LOAD_DEFAULT_CONNECTIONS=False
       - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgres+psycopg2://airflow:airflow@postgres:5432/airflow
       - AIRFLOW__CORE__FERNET_KEY=81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs=
       - AIRFLOW_CONN_METADATA_DB=postgres+psycopg2://airflow:airflow@postgres:5432/airflow
       - AIRFLOW_VAR__METADATA_DB_SCHEMA=airflow
       - AIRFLOW__SCHEDULER__SCHEDULER_HEARTBEAT_SEC=5
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
     env_file:
       - .env
     ports:
@@ -112,13 +163,12 @@ services:
     env_file:
       - .env
     environment:
-      - AIRFLOW__CORE__LOAD_DEFAULT_CONNECTIONS=False
       - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgres+psycopg2://airflow:airflow@postgres:5432/airflow
       - AIRFLOW__CORE__FERNET_KEY=81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs=
       - AIRFLOW_CONN_METADATA_DB=postgres+psycopg2://airflow:airflow@postgres:5432/airflow
       - AIRFLOW_VAR__METADATA_DB_SCHEMA=airflow
       - AIRFLOW__SCHEDULER__SCHEDULER_HEARTBEAT_SEC=5
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
     volumes:
       - ./dags:/opt/airflow/dags
       - ./airflow-logs:/opt/airflow/logs
@@ -132,44 +182,6 @@ services:
       retries: 2
     networks:
       - kafka-net
-
-######################################################
-# SPARK SERVICES
-######################################################
-  spark:
-    image: docker.io/bitnami/spark:3.5
-    environment:
-      - SPARK_MODE=master
-      - SPARK_RPC_AUTHENTICATION_ENABLED=no
-      - SPARK_RPC_ENCRYPTION_ENABLED=no
-      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
-      - SPARK_SSL_ENABLED=no
-      - SPARK_USER=spark
-      - JAVA_HOME=/opt/bitnami/java
-      - SPARK_JARS_DIR=/opt/bitnami/spark/jars
-    ports:
-      - "8181:8080"
-      - "7077:7077"
-    networks:
-      - kafka-net
-  spark-worker:
-    image: docker.io/bitnami/spark:3.5
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark:7077
-      - SPARK_WORKER_MEMORY=1G
-      - SPARK_WORKER_CORES=1
-      - SPARK_RPC_AUTHENTICATION_ENABLED=no
-      - SPARK_RPC_ENCRYPTION_ENABLED=no
-      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
-      - SPARK_SSL_ENABLED=no
-      - SPARK_USER=spark
-      - SPARK_JARS_DIR=/opt/bitnami/spark/jars
-      - JAVA_HOME=/opt/bitnami/java
-    networks:
-      - kafka-net
-    ports:
-      - "8082:8082"
 
 ## minio service
   minio:
@@ -188,7 +200,7 @@ services:
       command: server /data --console-address ":9001"
       networks:
           - kafka-net
-
+      
 networks:
   kafka-net:
     driver: bridge
@@ -196,3 +208,7 @@ networks:
 volumes:
   postgres-data:
   miniodata:
+  mysql-data:
+  zookeeper_data:
+  kafka_data:
+  superset_home:

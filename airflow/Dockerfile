@@ -30,12 +30,21 @@ RUN pip install --upgrade pip
 # Install boto3 (example package)
 RUN pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org boto3
 
+RUN pip install pyspark==3.5.0
+
+RUN pip install selenium webdriver-manager beautifulsoup4 minio lxml pandas
+
+# Install additional Python packages
+RUN pip install yfinance confluent_kafka minio pandas
+
 RUN pip install apache-airflow-providers-apache-spark
 
 RUN pip install apache-airflow-providers-amazon
 
 COPY hadoop-aws-3.3.4.jar /home/airflow/.local/lib/python3.11/site-packages/pyspark/jars
 COPY aws-java-sdk-bundle-1.12.262.jar /home/airflow/.local/lib/python3.11/site-packages/pyspark/jars
+COPY postgresql-42.2.5.jar /home/airflow/.local/lib/python3.11/site-packages/pyspark/jars
+COPY mysql-connector-java-8.0.28.jar /home/airflow/.local/lib/python3.11/site-packages/pyspark/jars
 
 # Switch back to the airflow user
 USER airflow
